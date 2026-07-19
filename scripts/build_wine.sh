@@ -54,7 +54,8 @@ build_native_tools() {
         tools/makedep \
         tools/make_xftmpl \
         tools/wmc/wmc \
-        tools/sfnt2fon/sfnt2fon
+        tools/sfnt2fon/sfnt2fon \
+        nls/all
 }
 
 build_ohos_unix() {
