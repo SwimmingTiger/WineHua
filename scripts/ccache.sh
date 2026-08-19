@@ -15,6 +15,12 @@
 #   NO_CCACHE=1     禁用构建缓存 (优先级最高)
 #   CCACHE_WRAPPER  用户自定义缓存工具 (优先级最高; 如 CCACHE_WRAPPER=ccache)
 #   CCACHE_SDK_DIR  影子 SDK 目录 (默认 $TMPDIR/ohos-sdk-ccache)
+#
+# 镜像实现: 编译器替换与符号链接镜像在 scripts/create-ccache-mirror.py (Python 单进程,
+# 避免 bash 逐条 fork cp/ln/basename/python3 造成的缓慢, llvm-mingw bin 约 700 个条目)。
+
+# 本文件所在目录 (被 source 时指向 scripts/), 用于定位 create-ccache-mirror.py
+CCACHE_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 
 # ── 1) 检测缓存工具 (source 时立即执行) ──
 if [ "${NO_CCACHE:-0}" = "1" ]; then
@@ -65,9 +71,6 @@ fi
 #   * 额外构造 llvm-mingw 影子 ($TMPDIR/llvm-mingw-ccache) 并 export LLVM_MINGW
 #     指向影子, 使 wine 的 PE 交叉编译 ($LLVM_MINGW/bin/clang) 也命中缓存; 三元组
 #     包装器经复制的 clang-target-wrapper.sh 转投影子 clang。
-realpath_of() {
-    python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$1" 2>/dev/null || echo "$1"
-}
 
 # 把给定目录放到 PATH 最前 (去重): 先移除 PATH 中已有的这些目录项, 再按参数顺序前置。
 # 用于确保影子 bin 一定在 PATH 开头, 让按名字查找的编译器调用 (如 clang/cc) 都命中缓存。
@@ -139,134 +142,14 @@ ccache_setup_shadow_sdk() {
         # 上文已从影子自身的 stamp 恢复出真实 SDK)
     fi
 
-    # 探测真实编译器 (clang/clang++ 最终指向的二进制), 版本变化自动适配
-    local real_clang real_clangxx
-    real_clang="$(realpath_of "$real_bin/clang")"
-    real_clangxx="$(realpath_of "$real_bin/clang++")"
-
     rm -rf "$shadow"
-    mkdir -p "$shadow/native/llvm/bin"
 
-    # ── 生成进度: 每处理一个条目输出一个 '.' ──
+    # ── 生成进度: 每处理一个条目输出一个 '.' (镜像逻辑见 create-ccache-mirror.py) ──
     printf '[CCACHE] 正在生成影子 SDK: %s\n' "$shadow"
-    printf '[CCACHE]   镜像 llvm/bin: '
-    local f name resolved compiler_arg
-    for f in "$real_bin"/*; do
-        name="$(basename "$f")"
-        compiler_arg=""
-        case "$name" in
-            clang|clang++|clang-cl|clang-cpp)
-                # 规范名: 直接用自身路径 (缓存工具可识别, 保持 clang/clang++ 语义)
-                compiler_arg="$f"
-                ;;
-            clang-[0-9]*|clang++-[0-9]*|clang-cl-[0-9]*|clang-cpp-[0-9]*)
-                # 版本化形式 (clang-15 / clang-15.0.6 ...): 与 clang/clang++ 同一
-                # 二进制时改用规范名 (识别更稳), 否则用自身路径
-                resolved="$(realpath_of "$f")"
-                if [ "$resolved" = "$real_clang" ]; then
-                    compiler_arg="$real_bin/clang"
-                elif [ "$resolved" = "$real_clangxx" ]; then
-                    compiler_arg="$real_bin/clang++"
-                else
-                    compiler_arg="$f"
-                fi
-                ;;
-            *-unknown-linux-ohos-clang|*-unknown-linux-ohos-clang++)
-                # 三元组包装器: 复制而非符号链接 (readlink -f \$0 需落在影子目录)
-                cp -f "$f" "$shadow/native/llvm/bin/$name"
-                chmod +x "$shadow/native/llvm/bin/$name"
-                printf '.'
-                continue
-                ;;
-            *)
-                if [[ "$name" == *clang* ]]; then
-                    # 改名/非常规命名的编译器兜底: realpath 命中真实编译器 → 替换
-                    resolved="$(realpath_of "$f")"
-                    if [ "$resolved" = "$real_clang" ]; then
-                        compiler_arg="$real_bin/clang"
-                    elif [ "$resolved" = "$real_clangxx" ]; then
-                        compiler_arg="$real_bin/clang++"
-                    fi
-                fi
-                ;;
-        esac
-        if [ -n "$compiler_arg" ]; then
-            # 包装脚本: exec <缓存工具> <真实编译器> "$@"
-            cat > "$shadow/native/llvm/bin/$name" <<EOF
-#!/bin/sh
-exec "$cache_tool" "$compiler_arg" "\$@"
-EOF
-            chmod +x "$shadow/native/llvm/bin/$name"
-        else
-            ln -sf "$f" "$shadow/native/llvm/bin/$name"
-        fi
-        printf '.'
-    done
-    printf '\n'
-
-    # 补充按名字查找的编译器入口: 包装到系统真实的 cc/c++/gcc/g++。用不含影子 bin
-    # 和真实 SDK bin 的干净 PATH 解析, 避免解析到我们自己的包装或 SDK clang。
-    # 系统缺少某个编译器时跳过 (进度输出 'x')。
-    local clean_path="" seg real_cc real_cxx real_gcc real_gxx
-    local old_ifs="$IFS"
-    IFS=:
-    for seg in $PATH; do
-        [ -n "$seg" ] || continue
-        [ "$seg" = "$shadow/native/llvm/bin" ] && continue
-        [ "$seg" = "$real_bin" ] && continue
-        clean_path="${clean_path:+$clean_path:}$seg"
-    done
-    IFS="$old_ifs"
-    real_cc="$(PATH="$clean_path" command -v cc 2>/dev/null || true)"
-    real_cxx="$(PATH="$clean_path" command -v c++ 2>/dev/null || true)"
-    real_gcc="$(PATH="$clean_path" command -v gcc 2>/dev/null || true)"
-    real_gxx="$(PATH="$clean_path" command -v g++ 2>/dev/null || true)"
-
-    printf '[CCACHE]   补充按名查找入口 (cc/c++/gcc/g++): '
-    local cc_name cc_compiler
-    for cc_name in cc c++ gcc g++; do
-        case "$cc_name" in
-            cc)  cc_compiler="$real_cc" ;;
-            c++) cc_compiler="$real_cxx" ;;
-            gcc) cc_compiler="$real_gcc" ;;
-            g++) cc_compiler="$real_gxx" ;;
-        esac
-        if [ -n "$cc_compiler" ]; then
-            cat > "$shadow/native/llvm/bin/$cc_name" <<EOF
-#!/bin/sh
-exec "$cache_tool" "$cc_compiler" "\$@"
-EOF
-            chmod +x "$shadow/native/llvm/bin/$cc_name"
-            printf '.'
-        else
-            printf 'x'
-        fi
-    done
-    printf '\n'
-
-    # 镜像 llvm 下除 bin 外的内容 (lib/include/... 新增内容自动纳入)
-    printf '[CCACHE]   镜像 llvm / native / SDK 顶层: '
-    for e in "$real_sdk/native/llvm"/*; do
-        name="$(basename "$e")"
-        [ "$name" = "bin" ] && continue
-        ln -sfn "$e" "$shadow/native/llvm/$name"
-        printf '.'
-    done
-    # 镜像 native 下除 llvm 外的内容
-    for e in "$real_sdk/native"/*; do
-        name="$(basename "$e")"
-        [ "$name" = "llvm" ] && continue
-        ln -sfn "$e" "$shadow/native/$name"
-        printf '.'
-    done
-    # 镜像 SDK 顶层除 native 外的内容
-    for e in "$real_sdk"/*; do
-        name="$(basename "$e")"
-        [ "$name" = "native" ] && continue
-        ln -sfn "$e" "$shadow/$name"
-        printf '.'
-    done
-    printf '\n'
+    if ! python3 "$CCACHE_SCRIPT_DIR/create-ccache-mirror.py" ohos "$real_sdk" "$shadow" "$cache_tool"; then
+        echo "[CCACHE] 错误: 影子 SDK 生成失败 (create-ccache-mirror.py)" >&2
+        return 1
+    fi
 
     # 记录来源 (真实 SDK + 缓存工具), 供下次 source 幂等复用
     printf '%s\n%s\n' "$real_sdk" "$cache_tool" > "$stamp"
@@ -321,72 +204,10 @@ ccache_setup_mingw_shadow() {
 
     printf '[CCACHE] 正在生成 llvm-mingw 影子: %s\n' "$shadow"
     rm -rf "$shadow"
-    mkdir -p "$shadow/bin"
-
-    local real_clang real_clangxx
-    real_clang="$(realpath_of "$real_bin/clang")"
-    real_clangxx="$(realpath_of "$real_bin/clang++")"
-
-    printf '[CCACHE]   镜像 bin: '
-    local f name resolved compiler_arg
-    for f in "$real_bin"/*; do
-        name="$(basename "$f")"
-        # 三元组包装器: 符号链接 → 影子内的 clang-target-wrapper.sh 副本
-        if [ -L "$f" ] && [ "$(readlink "$f")" = "clang-target-wrapper.sh" ]; then
-            ln -sf clang-target-wrapper.sh "$shadow/bin/$name"
-            printf '.'
-            continue
-        fi
-        case "$name" in
-            clang-target-wrapper.sh)
-                # 复制: get_dir \$0 需解析到影子目录, 才会 exec 影子 clang
-                cp -f "$f" "$shadow/bin/$name"
-                chmod +x "$shadow/bin/$name"
-                printf '.'
-                continue
-                ;;
-        esac
-        compiler_arg=""
-        case "$name" in
-            clang|clang++|clang-cl|clang-cpp)
-                # 规范名: 直接用自身路径 (缓存工具可识别, 保持 clang/clang++ 语义)
-                compiler_arg="$f"
-                ;;
-            clang-[0-9]*|clang++-[0-9]*|clang-cl-[0-9]*|clang-cpp-[0-9]*)
-                # 版本化形式 (clang-22 ...): 与 clang/clang++ 同一二进制时用规范名
-                resolved="$(realpath_of "$f")"
-                if [ "$resolved" = "$real_clang" ]; then
-                    compiler_arg="$real_bin/clang"
-                elif [ "$resolved" = "$real_clangxx" ]; then
-                    compiler_arg="$real_bin/clang++"
-                else
-                    compiler_arg="$f"
-                fi
-                ;;
-            *)
-                if [[ "$name" == *clang* ]]; then
-                    # 改名/非常规命名的编译器兜底: realpath 命中真实编译器 → 替换
-                    resolved="$(realpath_of "$f")"
-                    if [ "$resolved" = "$real_clang" ]; then
-                        compiler_arg="$real_bin/clang"
-                    elif [ "$resolved" = "$real_clangxx" ]; then
-                        compiler_arg="$real_bin/clang++"
-                    fi
-                fi
-                ;;
-        esac
-        if [ -n "$compiler_arg" ]; then
-            cat > "$shadow/bin/$name" <<EOF
-#!/bin/sh
-exec "$cache_tool" "$compiler_arg" "\$@"
-EOF
-            chmod +x "$shadow/bin/$name"
-        else
-            ln -sf "$f" "$shadow/bin/$name"
-        fi
-        printf '.'
-    done
-    printf '\n'
+    if ! python3 "$CCACHE_SCRIPT_DIR/create-ccache-mirror.py" mingw "$real_mingw" "$shadow" "$cache_tool"; then
+        echo "[CCACHE] 错误: llvm-mingw 影子生成失败 (create-ccache-mirror.py)" >&2
+        return 1
+    fi
 
     # 记录来源 (真实 LLVM_MINGW + 缓存工具), 供下次 source 幂等复用
     printf '%s\n%s\n' "$real_mingw" "$cache_tool" > "$stamp"
