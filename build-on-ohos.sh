@@ -137,6 +137,15 @@ fi
 
 set -x
 mkdir -p "$TMPDIR"
+{ set +x; } 2>/dev/null
+
+# ── 构建缓存 (sccache / ccache): 开始构建前启用 (逻辑在 scripts/ccache.sh) ──
+# source 即立即启用: 检测缓存工具 → 用符号链接构造影子 OHOS_SDK (编译器替换为调用
+# 缓存工具的包装脚本) → 切换 OHOS_SDK 指向影子, 使所有 $OHOS_SDK 绝对路径的编译器
+# 调用都命中缓存。用户也可在自己 shell 里手动 source 该文件启用。
+source "$(dirname "$0")/scripts/ccache.sh"
+
+set -x
 make NATIVE_ARCH=arm64-v8a "$@"
 rc=$?
 { set +x; } 2>/dev/null
