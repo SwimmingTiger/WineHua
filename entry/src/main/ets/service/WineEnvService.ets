@@ -786,7 +786,7 @@ export class WineEnvService {
     if (this.automationMode) {
       this.zHome = `${WINE_AUTOMATION_HOME}/`;
     } else if (this.gameTestMode) {
-      this.zHome = '/storage/Users/currentUser/Download/app.hackeris.winehua/';
+      this.zHome = '/storage/Users/currentUser/Download/cn.hu60.winehua/';
     } else if (!this.zHome) {
       const documentViewPicker = new picker.DocumentViewPicker(ctx);
       // DOWNLOAD 模式直达 Download/包名/ 不弹界面; 仍防御取消/异常 —

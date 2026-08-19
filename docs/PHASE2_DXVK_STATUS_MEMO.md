@@ -199,7 +199,7 @@ Run the capability matrix (Host Vulkan vs Venus):
 Launch the packaged visible D3D11 cube through normal game mode (manual
 visual check after the suite passes):
 
-    hdc shell aa start -a EntryAbility -b app.hackeris.winehua
+    hdc shell aa start -a EntryAbility -b cn.hu60.winehua
     # 桌面 Explorer 中运行 C:\smoke\x64\winehua_d3d_switch_cube.exe
 
 Before trusting a rebuilt package:

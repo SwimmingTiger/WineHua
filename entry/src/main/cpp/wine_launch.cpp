@@ -319,7 +319,7 @@ static void AppendStableDesktopDxvkEnv(std::vector<std::string>& env,
     UpsertEnvLine(env, "VN_WINEHUA_STRONG_RING_BARRIER=1");
     if (guestPerf) {
         UpsertEnvLine(env, "VN_WINEHUA_PERF_SUMMARY=1");
-        UpsertEnvLine(env, "VN_WINEHUA_PERF_LOG=/storage/Users/currentUser/Download/app.hackeris.winehua/winehua_guest_ring_perf.log");
+        UpsertEnvLine(env, "VN_WINEHUA_PERF_LOG=/storage/Users/currentUser/Download/cn.hu60.winehua/winehua_guest_ring_perf.log");
         /* vn_log uses MESA_LOG_DEBUG.  Raise only the explicit diagnostic
          * profile so the Guest ring summary survives the OHOS logger filter. */
         UpsertEnvLine(env, "MESA_LOG_LEVEL=debug");

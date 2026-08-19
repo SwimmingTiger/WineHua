@@ -1,6 +1,6 @@
 {
   "app": {
-    "bundleName": "app.hackeris.winehua",
+    "bundleName": "cn.hu60.winehua",
     "vendor": "example",
     "versionCode": 1000007,
     "versionName": "1.0.7",

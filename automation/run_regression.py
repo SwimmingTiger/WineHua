@@ -33,7 +33,7 @@ from pathlib import Path
 from validate_frame import validate_d3d11_cube, validate_rgba_quadrants
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-BUNDLE = "app.hackeris.winehua"
+BUNDLE = "cn.hu60.winehua"
 ABILITY = "EntryAbility"
 HAP_PATH = REPO_ROOT / "entry/build/default/outputs/default/entry-default-signed.hap"
 RAWFILE_ZIP = REPO_ROOT / "entry/src/main/resources/rawfile/wine-data.zip"

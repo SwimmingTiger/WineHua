@@ -731,7 +731,7 @@ export class WineWindowManager {
     }
 
     const want: Want = {
-      bundleName: 'app.hackeris.winehua',
+      bundleName: 'cn.hu60.winehua',
       abilityName: 'WineWindowAbility',
       parameters: { toplevelId: id, title: title, w: initW, h: initH }
     };
@@ -834,7 +834,7 @@ export class WineWindowManager {
     }
     try {
       const want: Want = {
-        bundleName: 'app.hackeris.winehua',
+        bundleName: 'cn.hu60.winehua',
         abilityName: 'DesktopAbility',
         parameters: { toplevelId: rootId }
       };
@@ -895,7 +895,7 @@ export class WineWindowManager {
     this.desktopWinStarting = true;
     hilog.info(DOMAIN, TAG, '[MW] startAbility(VirtualDesktopAbility)');
     const want: Want = {
-      bundleName: 'app.hackeris.winehua',
+      bundleName: 'cn.hu60.winehua',
       abilityName: 'VirtualDesktopAbility'
     };
     this.uiAbilityContext.startAbility(want).then(() => {
