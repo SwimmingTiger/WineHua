@@ -82,14 +82,21 @@ WRAPPER_C = (
 
 
 def wrapper_cc():
-    """选择编译包装器的 clang: 优先干净 PATH 中的 clang (宿主), 否则 None (由调用方
-    兜底为 OHOS SDK clang)。绝不用 llvm-mingw 的 clang (其宿主链接缺 crt/头文件)。"""
+    """选择编译包装器的编译器: 用系统 `cc` (宿主 C 编译器)。
+    cc 在 OHOS SDK / llvm-mingw 中肯定不存在, 因此不会误选到无法链接宿主二进制的
+    clang (macOS 上 OHOS clang 缺 macOS SDK, 报 ld: library 'System' not found)。
+    干净 PATH (仅排除缓存影子目录) 中查找, 找不到再回退常见系统位置。"""
     path = os.environ.get("PATH", "")
     clean = ":".join(p for p in path.split(":")
                      if p and "ohos-sdk-ccache" not in p and "llvm-mingw-ccache" not in p)
-    if not clean:
-        return None
-    return shutil.which("clang", path=clean)
+    if clean:
+        cand = shutil.which("cc", path=clean)
+        if cand:
+            return cand
+    for cand in ("/usr/bin/cc", "/usr/local/bin/cc", "/opt/homebrew/bin/cc"):
+        if os.path.isfile(cand) and os.access(cand, os.X_OK):
+            return cand
+    return None
 
 
 def make_clang_tmpdir():
