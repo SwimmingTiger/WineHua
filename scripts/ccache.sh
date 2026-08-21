@@ -162,19 +162,24 @@ ccache_setup_shadow_sdk() {
     fi
 
     # ── 阶段 3: 所有影子均就绪且无失败后, 才切换环境 (PATH / OHOS_SDK / LLVM_MINGW) ──
-    # 影子 bin 置顶 (去重), 真实 llvm/bin 兜底, 保证按名字查找的编译器调用命中缓存
-    prepend_path_front "$shadow/native/llvm/bin" "$real_bin"
-    export OHOS_SDK="$shadow"
+    # OHOS 影子 bin 置顶, mingw 影子 bin 紧随其后 (同名编译器 clang/clang++ 仍解析到
+    # OHOS 影子, mingw 独有名字如 x86_64-w64-mingw32-clang 也能按名找到), 真实
+    # llvm/bin 兜底 — 保证按名字查找的编译器调用命中缓存。
+    local mingw_shadow="${LLVM_MINGW_CCACHE_DIR:-$TMPDIR/llvm-mingw-ccache}"
     if [ "$MINGW_CCACHE_READY" = "1" ]; then
-        export LLVM_MINGW="${LLVM_MINGW_CCACHE_DIR:-$TMPDIR/llvm-mingw-ccache}"
+        prepend_path_front "$shadow/native/llvm/bin" "$mingw_shadow/bin" "$real_bin"
+        export LLVM_MINGW="$mingw_shadow"
+    else
+        prepend_path_front "$shadow/native/llvm/bin" "$real_bin"
     fi
+    export OHOS_SDK="$shadow"
     echo "[CCACHE] 构建缓存已启用: OHOS_SDK/LLVM_MINGW 已切换至影子 (禁用: NO_CCACHE=1)"
 }
 
 # 确保 llvm-mingw 影子就绪 (复用或生成), 只写影子与 stamp, 不修改环境变量。
-# 就绪后置 MINGW_CCACHE_READY=1, 由调用方在全部成功后统一 export LLVM_MINGW
-# (失败时不切换 LLVM_MINGW)。mingw 影子不进 PATH (避免与 OHOS 影子的 clang 抢占
-# 按名查找)。三元组包装器 (x86_64-w64-mingw32-clang 等) 是符号链接到共享的
+# 就绪后置 MINGW_CCACHE_READY=1, 由调用方在全部成功后统一 export LLVM_MINGW 并把
+# mingw 影子 bin 置于 PATH (OHOS 影子 bin 之后, 避免同名 clang 抢占按名查找)。
+# 三元组包装器 (x86_64-w64-mingw32-clang 等) 是符号链接到共享的
 # clang-target-wrapper.sh, 该脚本内部 get_dir \$0 会解析符号链接定位 clang —
 # 因此 clang-target-wrapper.sh 需复制进影子, 三元组符号链接重建为指向影子内副本,
 # 使 \$0 解析落在影子目录, 进而 exec 影子 clang (命中缓存)。
