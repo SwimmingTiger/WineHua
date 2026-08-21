@@ -6,7 +6,7 @@ create-ccache-mirror.py — 用符号链接镜像工具链 bin 目录, 把编译
 
 由 scripts/ccache.sh 调用: bash 逐条 fork cp/ln/basename/python3 太慢 (llvm-mingw
 bin 约 700 个条目), 本脚本用 Python 单进程完成全部镜像, 行为与原 bash 实现完全一致
-(包装脚本内容 / 符号链接 / 三元组包装器复制 / cc/c++/gcc/g++ 真实编译器解析 / 进度点)。
+(包装脚本内容 / 符号链接 / 三元组包装器复制 / 进度点)。
 
 用法:
     create-ccache-mirror.py ohos  <real_sdk>    <shadow_root> <cache_tool>
@@ -37,10 +37,6 @@ def _write(s):
 
 def dot():
     _write(".")
-
-
-def x_mark():
-    _write("x")
 
 
 def newline():
@@ -204,19 +200,6 @@ def mirror_bin(real_bin, shadow_bin, cache_tool, is_mingw, cc_cmd, clang_tmpdir)
     newline()
 
 
-def which_clean(name, blocked):
-    """在不含影子 bin 的干净 PATH 上解析系统真实编译器 (cc/gcc/c++/g++)。
-    排除任何含影子目录特征 (ohos-sdk-ccache / llvm-mingw-ccache) 的 PATH 项 —
-    不止当前影子 — 避免把历史/残留影子的包装解析成"真实"编译器。"""
-    path = os.environ.get("PATH", "")
-    clean = ":".join(p for p in path.split(":")
-                     if p and p not in blocked
-                     and "ohos-sdk-ccache" not in p and "llvm-mingw-ccache" not in p)
-    if not clean:
-        return None
-    return shutil.which(name, path=clean)
-
-
 def mirror_ohos_levels(real_sdk, shadow):
     """镜像 llvm(除 bin) / native(除 llvm) / SDK 顶层(除 native) 三级目录。"""
     levels = (
@@ -243,19 +226,6 @@ def mirror_ohos(real_sdk, shadow, cache_tool, fallback_cc=None, clang_tmpdir=Non
     _write("[CCACHE]   镜像 llvm/bin: ")
     mirror_bin(real_bin, shadow_bin, cache_tool, is_mingw=False, cc_cmd=cc_cmd,
                clang_tmpdir=clang_tmpdir)
-
-    # 补充按名字查找的编译器入口: 包装到系统真实的 cc/c++/gcc/g++
-    _write("[CCACHE]   补充按名查找入口 (cc/c++/gcc/g++): ")
-    blocked = {real_bin, shadow_bin}
-    for name in ("cc", "c++", "gcc", "g++"):
-        compiler = which_clean(name, blocked)
-        if compiler:
-            write_wrapper(os.path.join(shadow_bin, name), cache_tool, compiler, cc_cmd,
-                          clang_tmpdir)
-            dot()
-        else:
-            x_mark()
-    newline()
 
     _write("[CCACHE]   镜像 llvm / native / SDK 顶层: ")
     mirror_ohos_levels(real_sdk, shadow)

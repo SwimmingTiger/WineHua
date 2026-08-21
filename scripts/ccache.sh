@@ -26,7 +26,8 @@
 # 本文件所在目录 (被 source 时指向 scripts/), 用于定位 create-ccache-mirror.py
 CCACHE_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 # 影子格式版本: 包装器/布局变化时递增, 旧影子 stamp 第 3 行不匹配 → 自动重建
-CCACHE_FORMAT="2"
+# v3: 不再生成 cc/c++/gcc/g++ 包装入口
+CCACHE_FORMAT="3"
 
 # ── 1) 检测缓存工具 (source 时立即执行) ──
 if [ "${NO_CCACHE:-0}" = "1" ]; then
@@ -71,14 +72,12 @@ fi
 #   * 三元组包装器 (*-unknown-linux-ohos-clang) 整体复制 — 其内部 readlink -f \$0
 #     必须落在影子目录才会 exec 影子 clang;
 #   * 其余所有文件/文件夹一律符号链接 — 镜像按目录实际内容遍历, 新增内容自动纳入;
-#   * 补充按名字查找的编译器入口 cc/c++/gcc/g++ → 缓存工具 + 系统真实的同名编译器
-#     (以不含影子 bin / 真实 SDK bin 的干净 PATH 解析), 使不读 CC/CXX 环境变量、
-#     直接按名字找编译器的构建也命中缓存;
 #   * 额外构造 llvm-mingw 影子 ($TMPDIR/llvm-mingw-ccache) 并 export LLVM_MINGW
 #     指向影子, 使 wine 的 PE 交叉编译 ($LLVM_MINGW/bin/clang) 也命中缓存; 三元组
 #     包装器经复制的 clang-target-wrapper.sh 转投影子 clang。
 #   * 不修改 PATH: build-on-ohos.sh 在设置 PATH 之前 source 本文件, 使 PATH 导出
 #     直接使用影子路径 (防止 native 构建按名查找误用交叉编译器)。
+#   * 不对 cc/c++/gcc/g++ 做包装 (避免 native 构建按名查找误用影子编译器)。
 
 ccache_setup_shadow_sdk() {
     # $1 = "clean" 时跳过 (./build-on-ohos.sh clean 不需要影子 SDK)
