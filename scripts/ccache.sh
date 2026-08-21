@@ -7,9 +7,10 @@
 #   * 检测缓存工具 (优先级: 用户自定义 CCACHE_WRAPPER > sccache > ccache);
 #   * 用符号链接构造影子 OHOS_SDK (以及可选 llvm-mingw 影子), 把编译器替换为调用
 #     缓存工具的包装脚本;
-#   * 全部影子就绪且无失败后, 才把 OHOS_SDK / LLVM_MINGW 切换为影子路径并前置影子
-#     bin 到 PATH — 之后所有 $OHOS_SDK 绝对路径与按名查找的编译器调用都会命中缓存;
-#     任一步失败则不修改 PATH / OHOS_SDK / LLVM_MINGW (环境保持原样)。
+#   * 全部影子就绪且无失败后, 才把 OHOS_SDK / LLVM_MINGW 切换为影子路径 — 之后所有
+#     $OHOS_SDK 绝对路径的编译器调用都会命中缓存; 任一步失败则不修改环境。
+#   * 不修改 PATH: build-on-ohos.sh 在设置 PATH 之前 source 本文件, 使 PATH 导出
+#     直接使用影子路径 (防止 native 构建按名查找误用影子/交叉编译器)。
 # 依赖调用方提供: OHOS_SDK (真实 SDK 路径, 不自动推导); 影子 SDK 存放在
 # $TMPDIR/ohos-sdk-ccache (TMPDIR 未设置时默认 /tmp)。
 # 幂等: 重复 source 不会重建/叠加包装器 — 影子 SDK 内记录来源 stamp (真实 SDK +
@@ -76,26 +77,8 @@ fi
 #   * 额外构造 llvm-mingw 影子 ($TMPDIR/llvm-mingw-ccache) 并 export LLVM_MINGW
 #     指向影子, 使 wine 的 PE 交叉编译 ($LLVM_MINGW/bin/clang) 也命中缓存; 三元组
 #     包装器经复制的 clang-target-wrapper.sh 转投影子 clang。
-
-# 把给定目录放到 PATH 最前 (去重): 先移除 PATH 中已有的这些目录项, 再按参数顺序前置。
-# 用于确保影子 bin 一定在 PATH 开头, 让按名字查找的编译器调用 (如 clang/cc) 都命中缓存。
-prepend_path_front() {
-    local old_ifs="$IFS" seg keep new_path="" front=""
-    IFS=:
-    for seg in $PATH; do
-        [ -n "$seg" ] || continue
-        keep=1
-        for d in "$@"; do
-            [ "$seg" = "$d" ] && { keep=0; break; }
-        done
-        [ "$keep" = "1" ] && new_path="${new_path:+$new_path:}$seg"
-    done
-    IFS="$old_ifs"
-    for d in "$@"; do
-        front="${front:+$front:}$d"
-    done
-    export PATH="$front${new_path:+:$new_path}"
-}
+#   * 不修改 PATH: build-on-ohos.sh 在设置 PATH 之前 source 本文件, 使 PATH 导出
+#     直接使用影子路径 (防止 native 构建按名查找误用交叉编译器)。
 
 ccache_setup_shadow_sdk() {
     # $1 = "clean" 时跳过 (./build-on-ohos.sh clean 不需要影子 SDK)
@@ -161,24 +144,19 @@ ccache_setup_shadow_sdk() {
         return 1
     fi
 
-    # ── 阶段 3: 所有影子均就绪且无失败后, 才切换环境 (PATH / OHOS_SDK / LLVM_MINGW) ──
-    # OHOS 影子 bin 置顶, mingw 影子 bin 紧随其后 (同名编译器 clang/clang++ 仍解析到
-    # OHOS 影子, mingw 独有名字如 x86_64-w64-mingw32-clang 也能按名找到), 真实
-    # llvm/bin 兜底 — 保证按名字查找的编译器调用命中缓存。
-    local mingw_shadow="${LLVM_MINGW_CCACHE_DIR:-$TMPDIR/llvm-mingw-ccache}"
-    if [ "$MINGW_CCACHE_READY" = "1" ]; then
-        prepend_path_front "$shadow/native/llvm/bin" "$mingw_shadow/bin" "$real_bin"
-        export LLVM_MINGW="$mingw_shadow"
-    else
-        prepend_path_front "$shadow/native/llvm/bin" "$real_bin"
-    fi
+    # ── 阶段 3: 所有影子均就绪且无失败后, 才切换环境 (OHOS_SDK / LLVM_MINGW) ──
+    # 不修改 PATH (防止 native 构建按名查找误用影子/交叉编译器): build-on-ohos.sh
+    # 在设置 PATH 之前 source 本文件, 使 PATH 导出直接使用影子路径。
     export OHOS_SDK="$shadow"
+    if [ "$MINGW_CCACHE_READY" = "1" ]; then
+        export LLVM_MINGW="${LLVM_MINGW_CCACHE_DIR:-$TMPDIR/llvm-mingw-ccache}"
+    fi
     echo "[CCACHE] 构建缓存已启用: OHOS_SDK/LLVM_MINGW 已切换至影子 (禁用: NO_CCACHE=1)"
 }
 
 # 确保 llvm-mingw 影子就绪 (复用或生成), 只写影子与 stamp, 不修改环境变量。
-# 就绪后置 MINGW_CCACHE_READY=1, 由调用方在全部成功后统一 export LLVM_MINGW 并把
-# mingw 影子 bin 置于 PATH (OHOS 影子 bin 之后, 避免同名 clang 抢占按名查找)。
+# 就绪后置 MINGW_CCACHE_READY=1, 由调用方在全部成功后统一 export LLVM_MINGW。
+# 不把 mingw 影子 bin 加入 PATH (防止 native 构建按名查找误用交叉编译器)。
 # 三元组包装器 (x86_64-w64-mingw32-clang 等) 是符号链接到共享的
 # clang-target-wrapper.sh, 该脚本内部 get_dir \$0 会解析符号链接定位 clang —
 # 因此 clang-target-wrapper.sh 需复制进影子, 三元组符号链接重建为指向影子内副本,

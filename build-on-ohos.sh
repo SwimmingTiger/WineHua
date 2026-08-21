@@ -86,6 +86,13 @@ if [ "$UNAME_S" != "Linux" ]; then
     exit 1
 fi
 
+# ── 构建缓存 (sccache / ccache): 在设置 PATH 之前 source (逻辑在 scripts/ccache.sh) ──
+# ccache.sh 不修改 PATH — 在这里 source 后, 下方 PATH 导出直接使用已切换的影子
+# $OHOS_SDK / $LLVM_MINGW 路径; clean 时绕过 (不建影子、不改环境)。
+if [ "$1" != "clean" ]; then
+    source "$(dirname "$0")/scripts/ccache.sh"
+fi
+
 # We need the old cmake version from OHOS SDK.
 # Harmonybrew cmake version is too high to some thirdparty projects.
 set -x
@@ -138,12 +145,6 @@ fi
 set -x
 mkdir -p "$TMPDIR"
 { set +x; } 2>/dev/null
-
-# ── 构建缓存 (sccache / ccache): 开始构建前启用 (逻辑在 scripts/ccache.sh) ──
-# source 即立即启用: 检测缓存工具 → 用符号链接构造影子 OHOS_SDK (编译器替换为调用
-# 缓存工具的包装脚本) → 切换 OHOS_SDK 指向影子, 使所有 $OHOS_SDK 绝对路径的编译器
-# 调用都命中缓存。用户也可在自己 shell 里手动 source 该文件启用。
-source "$(dirname "$0")/scripts/ccache.sh"
 
 set -x
 make NATIVE_ARCH=arm64-v8a "$@"
