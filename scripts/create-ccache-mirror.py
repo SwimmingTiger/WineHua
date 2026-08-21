@@ -14,6 +14,7 @@ bin 约 700 个条目), 本脚本用 Python 单进程完成全部镜像, 行为�
 
 输出进度 (stdout, 每处理一个条目输出一个 '.'), 失败返回非零。
 """
+import glob
 import os
 import re
 import shutil
@@ -91,13 +92,33 @@ def wrapper_cc():
     return shutil.which("clang", path=clean)
 
 
-def write_wrapper(dest, cache_tool, compiler, cc_cmd):
+def make_clang_tmpdir():
+    """为 clang 编译包装器创建临时目录: 放在脚本所在目录旁 (仓库所在文件系统),
+    避开调用方 $TMPDIR 可能为不支持 clang 临时文件机制 (如 O_TMPFILE) 的文件系统,
+    否则 clang 会报 'unable to make temporary file: Read-only file system'。
+    脚本目录不可写时回退系统临时目录。返回 (目录路径, 清理函数)。"""
+    import tempfile
+    try:
+        base = os.path.dirname(os.path.abspath(__file__))
+        # 清理上次异常退出可能遗留的临时目录
+        for old in glob.glob(os.path.join(base, ".ccache-clang-tmp-*")):
+            shutil.rmtree(old, ignore_errors=True)
+        d = tempfile.mkdtemp(prefix=".ccache-clang-tmp-", dir=base)
+    except OSError:
+        d = tempfile.mkdtemp(prefix=".ccache-clang-tmp-")
+    return d
+
+
+def write_wrapper(dest, cache_tool, compiler, cc_cmd, clang_tmpdir):
     """生成 ELF 包装器 (C 源码经 stdin 注入 clang 编译, 不落临时文件)。
+    clang 的 TMPDIR 显式指向 clang_tmpdir, 不受调用方 $TMPDIR 影响。
     编译失败时把 clang 的 stdout/stderr 直接打印到本脚本 stderr, 再抛出异常。"""
     c_src = WRAPPER_C % (c_escape(cache_tool), c_escape(compiler))
-    proc = subprocess.run([cc_cmd, "-x", "c", "-", "-o", dest],
+    env = dict(os.environ)
+    env["TMPDIR"] = clang_tmpdir
+    proc = subprocess.run([cc_cmd, "-pipe", "-x", "c", "-", "-o", dest],
                           input=c_src.encode("utf-8"),
-                          stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
     if proc.returncode != 0:
         out = (proc.stdout or b"").decode("utf-8", "replace").strip()
         err = (proc.stderr or b"").decode("utf-8", "replace").strip()
@@ -115,7 +136,7 @@ def symlink(src, dest):
     os.symlink(src, dest)
 
 
-def mirror_bin(real_bin, shadow_bin, cache_tool, is_mingw, cc_cmd):
+def mirror_bin(real_bin, shadow_bin, cache_tool, is_mingw, cc_cmd, clang_tmpdir):
     """镜像 bin 目录: 编译器 → ELF 包装器, 三元组包装器按各自规则处理, 其余 → 符号链接。"""
     os.makedirs(shadow_bin, exist_ok=True)
     real_clang = os.path.realpath(os.path.join(real_bin, "clang"))
@@ -169,7 +190,7 @@ def mirror_bin(real_bin, shadow_bin, cache_tool, is_mingw, cc_cmd):
                 compiler_arg = os.path.join(real_bin, "clang++")
 
         if compiler_arg:
-            write_wrapper(dst, cache_tool, compiler_arg, cc_cmd)
+            write_wrapper(dst, cache_tool, compiler_arg, cc_cmd, clang_tmpdir)
         else:
             symlink(src, dst)
         dot()
@@ -206,14 +227,15 @@ def mirror_ohos_levels(real_sdk, shadow):
     newline()
 
 
-def mirror_ohos(real_sdk, shadow, cache_tool, fallback_cc=None):
+def mirror_ohos(real_sdk, shadow, cache_tool, fallback_cc=None, clang_tmpdir=None):
     real_bin = os.path.join(real_sdk, "native", "llvm", "bin")
     shadow_bin = os.path.join(shadow, "native", "llvm", "bin")
     # 编译包装器的 clang: 优先 PATH (宿主), 否则 OHOS SDK clang
     cc_cmd = wrapper_cc() or fallback_cc or os.path.join(real_bin, "clang")
 
     _write("[CCACHE]   镜像 llvm/bin: ")
-    mirror_bin(real_bin, shadow_bin, cache_tool, is_mingw=False, cc_cmd=cc_cmd)
+    mirror_bin(real_bin, shadow_bin, cache_tool, is_mingw=False, cc_cmd=cc_cmd,
+               clang_tmpdir=clang_tmpdir)
 
     # 补充按名字查找的编译器入口: 包装到系统真实的 cc/c++/gcc/g++
     _write("[CCACHE]   补充按名查找入口 (cc/c++/gcc/g++): ")
@@ -221,7 +243,8 @@ def mirror_ohos(real_sdk, shadow, cache_tool, fallback_cc=None):
     for name in ("cc", "c++", "gcc", "g++"):
         compiler = which_clean(name, blocked)
         if compiler:
-            write_wrapper(os.path.join(shadow_bin, name), cache_tool, compiler, cc_cmd)
+            write_wrapper(os.path.join(shadow_bin, name), cache_tool, compiler, cc_cmd,
+                          clang_tmpdir)
             dot()
         else:
             x_mark()
@@ -231,14 +254,14 @@ def mirror_ohos(real_sdk, shadow, cache_tool, fallback_cc=None):
     mirror_ohos_levels(real_sdk, shadow)
 
 
-def mirror_mingw(real_mingw, shadow, cache_tool, fallback_cc=None):
+def mirror_mingw(real_mingw, shadow, cache_tool, fallback_cc=None, clang_tmpdir=None):
     # 编译包装器的 clang: 优先 PATH (宿主), 否则 OHOS SDK clang (由调用方传入)
     cc_cmd = wrapper_cc() or fallback_cc
     if not cc_cmd:
         raise RuntimeError("PATH 中无 clang 且未提供 OHOS SDK clang 兜底, 无法编译包装器")
     _write("[CCACHE]   镜像 bin: ")
     mirror_bin(os.path.join(real_mingw, "bin"), os.path.join(shadow, "bin"),
-               cache_tool, is_mingw=True, cc_cmd=cc_cmd)
+               cache_tool, is_mingw=True, cc_cmd=cc_cmd, clang_tmpdir=clang_tmpdir)
 
 
 def main(argv):
@@ -254,14 +277,17 @@ def main(argv):
     if not os.path.isdir(real_bin):
         sys.stderr.write("错误: 未找到 %s\n" % real_bin)
         return 1
+    clang_tmpdir = make_clang_tmpdir()
     try:
         if mode == "ohos":
-            mirror_ohos(real, shadow, cache_tool, fallback_cc)
+            mirror_ohos(real, shadow, cache_tool, fallback_cc, clang_tmpdir)
         else:
-            mirror_mingw(real, shadow, cache_tool, fallback_cc)
+            mirror_mingw(real, shadow, cache_tool, fallback_cc, clang_tmpdir)
     except Exception as exc:  # 含 clang 编译 ELF 包装器失败
         sys.stderr.write("错误: 镜像失败: %s\n" % exc)
         return 1
+    finally:
+        shutil.rmtree(clang_tmpdir, ignore_errors=True)
     return 0
 
 
