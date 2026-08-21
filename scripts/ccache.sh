@@ -21,6 +21,8 @@
 
 # 本文件所在目录 (被 source 时指向 scripts/), 用于定位 create-ccache-mirror.py
 CCACHE_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+# 影子格式版本: 包装器/布局变化时递增, 旧影子 stamp 第 3 行不匹配 → 自动重建
+CCACHE_FORMAT="2"
 
 # ── 1) 检测缓存工具 (source 时立即执行) ──
 if [ "${NO_CCACHE:-0}" = "1" ]; then
@@ -130,12 +132,13 @@ ccache_setup_shadow_sdk() {
         local stored_real stored_tool
         stored_real="$(sed -n 1p "$stamp")"
         stored_tool="$(sed -n 2p "$stamp")"
-        if [ "$stored_real" = "$real_sdk" ] && [ "$stored_tool" = "$cache_tool" ]; then
+        if [ "$stored_real" = "$real_sdk" ] && [ "$stored_tool" = "$cache_tool" ] \
+           && [ "$(sed -n 3p "$stamp")" = "$CCACHE_FORMAT" ]; then
             # 影子 bin 置顶 (去重), 保证按名字查找的编译器调用命中缓存
             prepend_path_front "$shadow/native/llvm/bin" "$real_bin"
             export OHOS_SDK="$shadow"
             echo "[CCACHE] 影子 OHOS_SDK 已就绪 (复用): $shadow (禁用: NO_CCACHE=1)"
-            ccache_setup_mingw_shadow "$cache_tool"
+            ccache_setup_mingw_shadow "$cache_tool" "$real_sdk"
             return 0
         fi
         # 来源或工具变化 → 走下方重建 (真实 SDK 取 OHOS_SDK; 若其本身是影子,
@@ -151,8 +154,8 @@ ccache_setup_shadow_sdk() {
         return 1
     fi
 
-    # 记录来源 (真实 SDK + 缓存工具), 供下次 source 幂等复用
-    printf '%s\n%s\n' "$real_sdk" "$cache_tool" > "$stamp"
+    # 记录来源 (真实 SDK + 缓存工具 + 影子格式版本), 供下次 source 幂等复用
+    printf '%s\n%s\n%s\n' "$real_sdk" "$cache_tool" "$CCACHE_FORMAT" > "$stamp"
 
     # 影子 bin 置顶 (去重), 真实 llvm/bin 兜底, 保证按名字查找的编译器调用命中缓存
     prepend_path_front "$shadow/native/llvm/bin" "$real_bin"
@@ -160,7 +163,7 @@ ccache_setup_shadow_sdk() {
     echo "[CCACHE] 影子 OHOS_SDK 就绪: $shadow (禁用: NO_CCACHE=1)"
 
     # llvm-mingw 影子 (PE 交叉编译, 如 wine 的 --with-mingw)
-    ccache_setup_mingw_shadow "$cache_tool"
+    ccache_setup_mingw_shadow "$cache_tool" "$real_sdk"
 }
 
 # 构造 llvm-mingw 影子 (仅编译器 → 缓存工具包装脚本, 其余 → 符号链接), 然后
@@ -172,6 +175,8 @@ ccache_setup_shadow_sdk() {
 # 使 \$0 解析落在影子目录, 进而 exec 影子 clang (命中缓存)。
 ccache_setup_mingw_shadow() {
     local cache_tool="${1:-}"
+    # OHOS 真实 SDK (作为包装器编译 clang 的兜底, 避免用 llvm-mingw 的 clang)
+    local ohos_real_sdk="${2:-}"
     if [ -z "${CACHE_TOOL:-}" ] || [ -z "${LLVM_MINGW:-}" ] || ! [ -d "$LLVM_MINGW" ]; then
         return 0
     fi
@@ -195,7 +200,8 @@ ccache_setup_mingw_shadow() {
         local stored_real stored_tool
         stored_real="$(sed -n 1p "$stamp")"
         stored_tool="$(sed -n 2p "$stamp")"
-        if [ "$stored_real" = "$real_mingw" ] && [ "$stored_tool" = "$cache_tool" ]; then
+        if [ "$stored_real" = "$real_mingw" ] && [ "$stored_tool" = "$cache_tool" ] \
+           && [ "$(sed -n 3p "$stamp")" = "$CCACHE_FORMAT" ]; then
             export LLVM_MINGW="$shadow"
             echo "[CCACHE] llvm-mingw 影子就绪 (复用): $shadow"
             return 0
@@ -204,13 +210,13 @@ ccache_setup_mingw_shadow() {
 
     printf '[CCACHE] 正在生成 llvm-mingw 影子: %s\n' "$shadow"
     rm -rf "$shadow"
-    if ! python3 "$CCACHE_SCRIPT_DIR/create-ccache-mirror.py" mingw "$real_mingw" "$shadow" "$cache_tool"; then
+    if ! python3 "$CCACHE_SCRIPT_DIR/create-ccache-mirror.py" mingw "$real_mingw" "$shadow" "$cache_tool" "$ohos_real_sdk/native/llvm/bin/clang"; then
         echo "[CCACHE] 错误: llvm-mingw 影子生成失败 (create-ccache-mirror.py)" >&2
         return 1
     fi
 
-    # 记录来源 (真实 LLVM_MINGW + 缓存工具), 供下次 source 幂等复用
-    printf '%s\n%s\n' "$real_mingw" "$cache_tool" > "$stamp"
+    # 记录来源 (真实 LLVM_MINGW + 缓存工具 + 影子格式版本), 供下次 source 幂等复用
+    printf '%s\n%s\n%s\n' "$real_mingw" "$cache_tool" "$CCACHE_FORMAT" > "$stamp"
     export LLVM_MINGW="$shadow"
     echo "[CCACHE] llvm-mingw 影子就绪: $shadow (禁用: NO_CCACHE=1)"
 }
