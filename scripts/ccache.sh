@@ -29,7 +29,8 @@ CCACHE_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 CCACHE_PROJECT_ROOT="$(cd "$CCACHE_SCRIPT_DIR/.." && pwd)"
 # 影子格式版本: 包装器/布局变化时递增, 旧影子 stamp 第 3 行不匹配 → 自动重建
 # v3: 不再生成 cc/c++/gcc/g++ 包装入口
-CCACHE_FORMAT="3"
+# v4: 统一镜像整个工具链树 (bin 之外的所有目录也链接)
+CCACHE_FORMAT="4"
 
 # ── 1) 检测缓存工具 (source 时立即执行) ──
 if [ "${NO_CCACHE:-0}" = "1" ]; then
@@ -131,7 +132,7 @@ ccache_setup_shadow_sdk() {
     if [ "$ohos_ready" = "0" ]; then
         rm -rf "$shadow"
         printf '[CCACHE] 正在生成 OHOS_SDK 影子: %s\n' "$shadow"
-        if ! python3 "$CCACHE_SCRIPT_DIR/create-ccache-mirror.py" ohos "$real_sdk" "$shadow" "$cache_tool"; then
+        if ! python3 "$CCACHE_SCRIPT_DIR/create-ccache-mirror.py" "$real_sdk" "$shadow" "$cache_tool" "native/llvm/bin" "" ""; then
             echo "[CCACHE] 错误: OHOS_SDK 影子生成失败 (create-ccache-mirror.py)" >&2
             return 1
         fi
@@ -199,7 +200,7 @@ ccache_ensure_mingw_shadow() {
 
     printf '[CCACHE] 正在生成 LLVM_MINGW 影子: %s\n' "$shadow"
     rm -rf "$shadow"
-    if ! python3 "$CCACHE_SCRIPT_DIR/create-ccache-mirror.py" mingw "$real_mingw" "$shadow" "$cache_tool" "$ohos_real_sdk/native/llvm/bin/clang"; then
+    if ! python3 "$CCACHE_SCRIPT_DIR/create-ccache-mirror.py" "$real_mingw" "$shadow" "$cache_tool" "bin" "1" "$ohos_real_sdk/native/llvm/bin/clang"; then
         echo "[CCACHE] 错误: LLVM_MINGW 影子生成失败 (create-ccache-mirror.py)" >&2
         return 1
     fi

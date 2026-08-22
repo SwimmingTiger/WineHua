@@ -1,16 +1,23 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-create-ccache-mirror.py — 用符号链接镜像工具链 bin 目录, 把编译器替换为调用缓存
-工具 (sccache/ccache) 的包装脚本。
+create-ccache-mirror.py — 泛化镜像整个工具链树: 给定根目录与编译器 bin 的相对路径
+(bin_rel), 沿路径逐层下行, 每层把除路径外的兄弟条目尽可能在外层整体符号链接
+(整个子树一个链接); 最后一层 bin 内的编译器替换为调用缓存工具 (sccache/ccache)
+的 ELF 包装脚本。不区分 llvm-mingw / ohos-sdk。
 
 由 scripts/ccache.sh 调用: bash 逐条 fork cp/ln/basename/python3 太慢 (llvm-mingw
-bin 约 700 个条目), 本脚本用 Python 单进程完成全部镜像, 行为与原 bash 实现完全一致
-(包装脚本内容 / 符号链接 / 三元组包装器复制 / 进度点)。
+bin 约 700 个条目), 本脚本用 Python 单进程完成全部镜像。
 
 用法:
-    create-ccache-mirror.py ohos  <real_sdk>    <shadow_root> <cache_tool>
-    create-ccache-mirror.py mingw <real_mingw>  <shadow_root> <cache_tool>
+    create-ccache-mirror.py <real_root> <shadow_root> <cache_tool> <bin_rel> [is_mingw] [fallback_cc]
+
+    real_root   工具链根目录 (如 OHOS SDK 或 llvm-mingw 根)
+    shadow_root 影子根目录 (镜像输出)
+    cache_tool  缓存工具 (sccache/ccache) 路径
+    bin_rel     编译器 bin 相对路径 (如 native/llvm/bin 或 bin)
+    is_mingw    1 表示 bin 内按 llvm-mingw 三元组包装器规则处理 (可选)
+    fallback_cc 编译包装器用的兜底编译器 (可选)
 
 输出进度 (stdout, 每处理一个条目输出一个 '.'), 失败返回非零。
 """
@@ -198,66 +205,57 @@ def mirror_bin(real_bin, shadow_bin, cache_tool, is_mingw, cc_cmd, clang_tmpdir)
     newline()
 
 
-def mirror_ohos_levels(real_sdk, shadow):
-    """镜像 llvm(除 bin) / native(除 llvm) / SDK 顶层(除 native) 三级目录。"""
-    levels = (
-        (os.path.join(real_sdk, "native", "llvm"), os.path.join(shadow, "native", "llvm"), "bin"),
-        (os.path.join(real_sdk, "native"), os.path.join(shadow, "native"), "llvm"),
-        (real_sdk, shadow, "native"),
-    )
-    for src_dir, dst_dir, skip in levels:
-        os.makedirs(dst_dir, exist_ok=True)
-        for name in os.listdir(src_dir):
-            if name == skip:
+def mirror_toolchain(real_root, shadow_root, cache_tool, bin_rel, is_mingw,
+                     cc_cmd, clang_tmpdir):
+    """泛化镜像: 从工具链根出发, 沿 bin_rel 相对路径逐层下行。每一层先在本层把除
+    路径外的兄弟条目尽可能在外层整体符号链接 (整个子树一个链接), 再进入下一层;
+    最后一层 (bin) 的兄弟链接完后, 进入 bin 用 mirror_bin 做包装镜像。
+    不区分 llvm-mingw / ohos-sdk — 只需给出根目录与 bin 相对路径。"""
+    parts = [p for p in bin_rel.split("/") if p]
+    if not parts:
+        raise RuntimeError("bin_rel 不能为空")
+    cur_real, cur_shadow = real_root, shadow_root
+    path_so_far = ""
+    for part in parts:
+        # 1) 当前层: 除 part 外的兄弟条目, 尽可能在外层整体符号链接
+        os.makedirs(cur_shadow, exist_ok=True)
+        _write("[CCACHE]   镜像 %s (除 %s): "
+               % (path_so_far.rstrip("/") or "顶层", part))
+        for name in sorted(os.listdir(cur_real)):
+            if name == part:
                 continue
-            symlink(os.path.join(src_dir, name), os.path.join(dst_dir, name))
+            symlink(os.path.join(cur_real, name), os.path.join(cur_shadow, name))
             dot()
-    newline()
-
-
-def mirror_ohos(real_sdk, shadow, cache_tool, fallback_cc=None, clang_tmpdir=None):
-    real_bin = os.path.join(real_sdk, "native", "llvm", "bin")
-    shadow_bin = os.path.join(shadow, "native", "llvm", "bin")
-    # 编译包装器的 clang: 优先 PATH (宿主), 否则 OHOS SDK clang
-    cc_cmd = wrapper_cc() or fallback_cc or os.path.join(real_bin, "clang")
-
-    _write("[CCACHE]   镜像 llvm/bin: ")
-    mirror_bin(real_bin, shadow_bin, cache_tool, is_mingw=False, cc_cmd=cc_cmd,
-               clang_tmpdir=clang_tmpdir)
-
-    _write("[CCACHE]   镜像 llvm / native / SDK 顶层: ")
-    mirror_ohos_levels(real_sdk, shadow)
-
-
-def mirror_mingw(real_mingw, shadow, cache_tool, fallback_cc=None, clang_tmpdir=None):
-    # 编译包装器的 clang: 优先 PATH (宿主), 否则 OHOS SDK clang (由调用方传入)
-    cc_cmd = wrapper_cc() or fallback_cc
-    if not cc_cmd:
-        raise RuntimeError("PATH 中无 clang 且未提供 OHOS SDK clang 兜底, 无法编译包装器")
-    _write("[CCACHE]   镜像 bin: ")
-    mirror_bin(os.path.join(real_mingw, "bin"), os.path.join(shadow, "bin"),
-               cache_tool, is_mingw=True, cc_cmd=cc_cmd, clang_tmpdir=clang_tmpdir)
+        newline()
+        # 2) 进入下一层
+        cur_real = os.path.join(cur_real, part)
+        cur_shadow = os.path.join(cur_shadow, part)
+        path_so_far = part + "/"
+    # 3) 最后一层 (bin): 包装镜像
+    _write("[CCACHE]   镜像 %s: " % path_so_far.rstrip("/"))
+    mirror_bin(cur_real, cur_shadow, cache_tool, is_mingw, cc_cmd, clang_tmpdir)
 
 
 def main(argv):
-    # 用法: ohos|mingw <real> <shadow> <cache_tool> [fallback_cc]
-    if len(argv) not in (5, 6) or argv[1] not in ("ohos", "mingw"):
+    # 用法: <real_root> <shadow_root> <cache_tool> <bin_rel> [is_mingw] [fallback_cc]
+    if len(argv) not in (5, 6, 7):
         sys.stderr.write(
-            "用法: %s ohos|mingw <real> <shadow_root> <cache_tool> [fallback_cc]\n" % argv[0])
+            "用法: %s <real_root> <shadow_root> <cache_tool> <bin_rel> [is_mingw] [fallback_cc]\n"
+            % argv[0])
         return 2
-    mode, real, shadow, cache_tool = argv[1:5]
-    fallback_cc = argv[5] if len(argv) == 6 else None
-    real_bin = (os.path.join(real, "native", "llvm", "bin") if mode == "ohos"
-                else os.path.join(real, "bin"))
+    real, shadow, cache_tool, bin_rel = argv[1:5]
+    is_mingw = (argv[5] == "1") if len(argv) >= 6 else False
+    fallback_cc = argv[6] if len(argv) == 7 else None
+    real_bin = os.path.join(real, bin_rel)
     if not os.path.isdir(real_bin):
         sys.stderr.write("错误: 未找到 %s\n" % real_bin)
         return 1
+    # 编译包装器的编译器: 优先 PATH (宿主 cc), 否则调用方兜底, 最后用 bin 自带 clang
+    cc_cmd = wrapper_cc() or fallback_cc or os.path.join(real_bin, "clang")
     clang_tmpdir = make_clang_tmpdir()
     try:
-        if mode == "ohos":
-            mirror_ohos(real, shadow, cache_tool, fallback_cc, clang_tmpdir)
-        else:
-            mirror_mingw(real, shadow, cache_tool, fallback_cc, clang_tmpdir)
+        mirror_toolchain(real, shadow, cache_tool, bin_rel, is_mingw,
+                         cc_cmd, clang_tmpdir)
     except Exception as exc:  # 含 clang 编译 ELF 包装器失败
         sys.stderr.write("错误: 镜像失败: %s\n" % exc)
         return 1
