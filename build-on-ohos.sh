@@ -90,6 +90,8 @@ fi
 # ccache.sh 不修改 PATH — 在这里 source 后, 下方 PATH 导出直接使用已切换的影子
 # $OHOS_SDK / $LLVM_MINGW 路径; clean 时绕过 (不建影子、不改环境)。
 if [ "$1" != "clean" ]; then
+    export OHOS_SDK_CCACHE_DIR="$BUILD_DIR/ohos-sdk-ccache"
+    export LLVM_MINGW_CCACHE_DIR="$BUILD_DIR/llvm-mingw-ccache"
     source "$(dirname "$0")/scripts/ccache.sh"
 fi
 
@@ -122,9 +124,12 @@ if [ "$1" = "clean" ]; then
     set -x
     make clean
     rm -rf "$BUILD_DIR" ./build
+    # 同时清理 bak 构建目录
+    rm -rf ./build-bak-* || true
     exit 0
 fi
 
+# 把 ./build 目录链接到 $BUILD_DIR，重命名旧目录为 ./build-bak-日期-时间
 if [ "$(realpath ./build)" != "$BUILD_DIR" ]; then
     if [ -L ./build ]; then
         set -x
