@@ -12,19 +12,21 @@
 #   * 不修改 PATH: build-on-ohos.sh 在设置 PATH 之前 source 本文件, 使 PATH 导出
 #     直接使用影子路径 (防止 native 构建按名查找误用影子/交叉编译器)。
 # 依赖调用方提供: OHOS_SDK (真实 SDK 路径, 不自动推导); 影子 SDK 存放在
-# $TMPDIR/ohos-sdk-ccache (TMPDIR 未设置时默认 /tmp)。
+# 项目根目录下的 build/ (固定路径, 不依赖 TMPDIR / BUILD_DIR 环境变量)。
 # 幂等: 重复 source 不会重建/叠加包装器 — 影子 SDK 内记录来源 stamp (真实 SDK +
 # 缓存工具), 已存在且缓存工具未变时直接复用; 缓存工具变化时才基于 stamp 重建。
 # 环境变量:
 #   NO_CCACHE=1     禁用构建缓存 (优先级最高)
 #   CCACHE_WRAPPER  用户自定义缓存工具 (优先级最高; 如 CCACHE_WRAPPER=ccache)
-#   CCACHE_SDK_DIR  影子 SDK 目录 (默认 $TMPDIR/ohos-sdk-ccache)
+#   CCACHE_SDK_DIR  影子 SDK 目录 (默认 $PROJECT_ROOT/build/ohos-sdk-ccache)
 #
 # 镜像实现: 编译器替换与符号链接镜像在 scripts/create-ccache-mirror.py (Python 单进程,
 # 避免 bash 逐条 fork cp/ln/basename/python3 造成的缓慢, llvm-mingw bin 约 700 个条目)。
 
-# 本文件所在目录 (被 source 时指向 scripts/), 用于定位 create-ccache-mirror.py
+# 本文件所在目录 (被 source 时指向 scripts/) 与项目根目录, 用于定位
+# create-ccache-mirror.py 和固定影子目录 (项目根/build/)
 CCACHE_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+CCACHE_PROJECT_ROOT="$(cd "$CCACHE_SCRIPT_DIR/.." && pwd)"
 # 影子格式版本: 包装器/布局变化时递增, 旧影子 stamp 第 3 行不匹配 → 自动重建
 # v3: 不再生成 cc/c++/gcc/g++ 包装入口
 CCACHE_FORMAT="3"
@@ -60,9 +62,10 @@ else
 fi
 
 # ── 2) 影子 OHOS_SDK ──
-# 原理: 把整个 SDK 镜像成符号链接目录 ($CCACHE_SDK_DIR, 默认 $BUILD_DIR/ohos-sdk-ccache,
-# 位于 HMDFS 之外), 仅把编译器替换为调用缓存工具的包装脚本。之后 meson 交叉文件 /
-# wine $CLANG / cmake toolchain 里的 $OHOS_SDK 绝对路径全部命中缓存, 无需改任何脚本。
+# 原理: 把整个 SDK 镜像成符号链接目录 ($CCACHE_SDK_DIR, 默认项目根/build/ohos-sdk-ccache,
+# 项目根为脚本所在目录的上一级), 仅把编译器替换为调用缓存工具的包装脚本。之后 meson
+# 交叉文件 / wine $CLANG / cmake toolchain 里的 $OHOS_SDK 绝对路径全部命中缓存,
+# 无需改任何脚本。
 # 启发式探测 (面向未来 SDK 变化, 不遗漏):
 #   * 真实编译器 = clang / clang++ 符号链接最终指向的二进制 (realpath), 版本号变化
 #     (clang-15 → clang-16 / clang-15.0.6) 自动适配;
@@ -72,9 +75,9 @@ fi
 #   * 三元组包装器 (*-unknown-linux-ohos-clang) 整体复制 — 其内部 readlink -f \$0
 #     必须落在影子目录才会 exec 影子 clang;
 #   * 其余所有文件/文件夹一律符号链接 — 镜像按目录实际内容遍历, 新增内容自动纳入;
-#   * 额外构造 llvm-mingw 影子 ($TMPDIR/llvm-mingw-ccache) 并 export LLVM_MINGW
-#     指向影子, 使 wine 的 PE 交叉编译 ($LLVM_MINGW/bin/clang) 也命中缓存; 三元组
-#     包装器经复制的 clang-target-wrapper.sh 转投影子 clang。
+#   * 额外构造 llvm-mingw 影子 (默认项目根/build/llvm-mingw-ccache) 并 export
+#     LLVM_MINGW 指向影子, 使 wine 的 PE 交叉编译 ($LLVM_MINGW/bin/clang) 也命中缓存;
+#     三元组包装器经复制的 clang-target-wrapper.sh 转投影子 clang。
 #   * 不修改 PATH: build-on-ohos.sh 在设置 PATH 之前 source 本文件, 使 PATH 导出
 #     直接使用影子路径 (防止 native 构建按名查找误用交叉编译器)。
 #   * 不对 cc/c++/gcc/g++ 做包装 (避免 native 构建按名查找误用影子编译器)。
@@ -95,9 +98,8 @@ ccache_setup_shadow_sdk() {
     fi
     local real_sdk="$OHOS_SDK"
     local cache_tool="$CACHE_TOOL"
-    # 影子 SDK 直接放在 TMPDIR (未设置时默认 /tmp)
-    local TMPDIR="${TMPDIR:-/tmp}"
-    local shadow="${CCACHE_SDK_DIR:-$TMPDIR/ohos-sdk-ccache}"
+    # 影子 SDK 默认放在项目根/build/ (固定路径)
+    local shadow="${CCACHE_SDK_DIR:-$CCACHE_PROJECT_ROOT/build/ohos-sdk-ccache}"
 
     # 幂等: 若 OHOS_SDK 已被上一轮 source 切换成影子, 从影子内的 stamp 恢复真实 SDK,
     # 避免把影子当真实 SDK 再镜像一层 (或重建出损坏的影子)
@@ -148,7 +150,7 @@ ccache_setup_shadow_sdk() {
     # 在设置 PATH 之前 source 本文件, 使 PATH 导出直接使用影子路径。
     export OHOS_SDK="$shadow"
     if [ "$MINGW_CCACHE_READY" = "1" ]; then
-        export LLVM_MINGW="${LLVM_MINGW_CCACHE_DIR:-$TMPDIR/llvm-mingw-ccache}"
+        export LLVM_MINGW="${LLVM_MINGW_CCACHE_DIR:-$CCACHE_PROJECT_ROOT/build/llvm-mingw-ccache}"
     fi
     echo "[CCACHE] 构建缓存已启用: OHOS_SDK/LLVM_MINGW 已切换至影子 (禁用: NO_CCACHE=1)"
 }
@@ -171,8 +173,7 @@ ccache_ensure_mingw_shadow() {
 
     # 幂等: LLVM_MINGW 可能已是影子 → 从影子 stamp 恢复真实路径
     local real_mingw="$LLVM_MINGW"
-    local TMPDIR="${TMPDIR:-/tmp}"
-    local shadow="${LLVM_MINGW_CCACHE_DIR:-$TMPDIR/llvm-mingw-ccache}"
+    local shadow="${LLVM_MINGW_CCACHE_DIR:-$CCACHE_PROJECT_ROOT/build/llvm-mingw-ccache}"
     local stamp="$shadow/.ccache-stamp"
     if [ -f "$real_mingw/.ccache-stamp" ]; then
         real_mingw="$(sed -n 1p "$real_mingw/.ccache-stamp")"

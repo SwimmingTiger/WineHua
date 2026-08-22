@@ -96,16 +96,14 @@ def wrapper_cc():
 
 
 def make_clang_tmpdir():
-    """为 clang 编译包装器创建临时目录: 放在脚本所在目录旁 (仓库所在文件系统),
-    避开调用方 $TMPDIR 可能为不支持 clang 临时文件机制 (如 O_TMPFILE) 的文件系统,
-    否则 clang 会报 'unable to make temporary file: Read-only file system'。
-    脚本目录不可写时回退系统临时目录。返回 (目录路径, 清理函数)。"""
+    """为 clang 编译包装器创建临时目录: 放在 build 目录中的临时文件夹里。
+    不创建临时文件夹的话，鸿蒙PC的 clang 可能会报
+    'unable to make temporary file: Read-only file system'。
+    build 目录不可写时回退系统临时目录。返回 (目录路径, 清理函数)。"""
     import tempfile
     try:
-        base = os.path.dirname(os.path.abspath(__file__))
-        # 清理上次异常退出可能遗留的临时目录
-        for old in glob.glob(os.path.join(base, ".ccache-clang-tmp-*")):
-            shutil.rmtree(old, ignore_errors=True)
+        base = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'build')
+        os.makedirs(base, exist_ok=True)
         d = tempfile.mkdtemp(prefix=".ccache-clang-tmp-", dir=base)
     except OSError:
         d = tempfile.mkdtemp(prefix=".ccache-clang-tmp-")
